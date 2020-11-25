@@ -398,11 +398,11 @@ int layer_lut[] =
 int pad_lut[] =
 {
     0,
-    0x00008000 | 0x00800000 | 0x00080000,       //LAYER_TOP
+    0x00008000 | 0x00800000 | 0x00080000,       //LAYER_TOP: CMP_LAYER | SOLDER_MASK_LAYER_CMP | SOLDER_PASTE_LAYER_CMP
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,   //inner layers
-    0x00000001 | 0x00400000,                    //LAYER_BOTTOM
-    0x0000FFFF | 0x00C00000 | 0x000C0000,       //LAYER_PADS
-    0x00008001 | 0x00800000 | 0x00400000,       //LAYER_VIAS
+    0x00000001 | 0x00400000,                    //LAYER_BOTTOM: CUIVRE_LAYER | SOLDERMASK_LAYER_CU
+    0x0000FFFF | 0x00C00000 /*| 0x000C0000*/,       //LAYER_PADS: ALL_CU_LAYERS | SOLDERMASK_LAYER_CU | SOLDERMASK_LAYER_CMP /* | SOLDERPASTE_LAYER_CU | SOLDERPASTE_LAYER_CMP */
+    0x00008001 | 0x00800000 | 0x00400000,       //LAYER_VIAS: CUIVRE_LAYER | CMP_LAYER | SOLDERMASK_LAYER_CMP | SOLDERMASK_LAYER_CU
     0,              //LAYER_UNROUTED
     0,              //LAYER_DIMENSION
     0,              //LAYER_TPLACE
@@ -762,7 +762,8 @@ void write_kikad_mod_pad(UL_PACKAGE PAC)
     {
 		char shp = 'R';
 		string signal, type = "STD";
-		int angle = 0, dx, dy, drill, layset, xoff, yoff;
+		int angle = 0, dx, dy, drill, xoff, yoff, layer_mask = 0;
+		
 
         // write PAD start tag
         printf("$PAD\n");
@@ -783,7 +784,20 @@ void write_kikad_mod_pad(UL_PACKAGE PAC)
             angle = CN.smd.angle;
             dx = CN.smd.dx;
             dy = CN.smd.dy;
-            layset = CN.smd.layer;
+			/*
+			SMD_FLAG_STOP	generate stop mask
+			SMD_FLAG_THERMALS	generate thermals
+			SMD_FLAG_CREAM	generate cream mask
+			*/
+			layer_mask = 0x00008000;	// Copper layer always
+			
+			if (CN.smd.flags & SMD_FLAG_CREAM) {
+				layer_mask |= 0x00080000;	// Solder paste layer
+			}
+			
+			if (CN.smd.flags & SMD_FLAG_STOP) {
+				layer_mask |= 0x00800000;	// Solder mask layer
+			}
         }
 
         if (CN.pad)
@@ -813,8 +827,10 @@ void write_kikad_mod_pad(UL_PACKAGE PAC)
             {
                 shp = 'O';
                 angle = CN.pad.angle + 90;
-                dy = CN.pad.diameter[LAYER_TOP] * 2;
-				yoff = dx/2;
+				// real ratio = 2;
+				real ratio = 1.5;
+                dy = CN.pad.diameter[LAYER_TOP] * ratio;
+				yoff = (dy - dx) / 2;
             }
             if (CN.pad.shape[LAYER_TOP] == PAD_SHAPE_SQUARE )
             {
@@ -824,8 +840,7 @@ void write_kikad_mod_pad(UL_PACKAGE PAC)
 
             
             drill = CN.pad.drill;
-            layset = LAYER_PADS ;
-
+			layer_mask = pad_lut[LAYER_PADS];
         }
 
         // pad shape
@@ -833,7 +848,7 @@ void write_kikad_mod_pad(UL_PACKAGE PAC)
 
         printf("Dr %d %d %d \n", egl2ki(drill), egl2ki(xoff), egl2ki(yoff));
 
-        printf("At %s N %08X\n", type, pad_lut[layset]);
+        printf("At %s N %08X\n", type, layer_mask);
 
         printf("Ne 0 \"%s\"\n", "");    // should always be a null not signal name !
 
@@ -877,10 +892,10 @@ void rotateRectangle(UL_RECTANGLE r) {
 	 * newy = sin(angle) * oldx + cos(angle) * oldy ;
 	 */
 	 
-	rotatedRect[0] = (r.x1 - centerX) * cos(rad) - (r.y1 - centerY) * sin(rad) + centerX;
-	rotatedRect[1] = (r.x2 - centerX) * cos(rad) - (r.y2 - centerY) * sin(rad) + centerX;
-	rotatedRect[2] = (r.x1 - centerX) * sin(rad) + (r.y1 - centerY) * cos(rad) + centerY;
-	rotatedRect[3] = (r.x2 - centerX) * sin(rad) + (r.y2 - centerY) * cos(rad) + centerY;
+	rotatedRect[0] = (r.x1 - centerX) * cos(rad) - (r.y1 - centerY) * sin(rad) + centerX;	// x1
+	rotatedRect[1] = (r.x2 - centerX) * cos(rad) - (r.y2 - centerY) * sin(rad) + centerX;	// x2
+	rotatedRect[2] = (r.x1 - centerX) * sin(rad) + (r.y1 - centerY) * cos(rad) + centerY;	// y1
+	rotatedRect[3] = (r.x2 - centerX) * sin(rad) + (r.y2 - centerY) * cos(rad) + centerY;	// y2
 }
 
 //------------------------------------------------------
@@ -903,18 +918,15 @@ void write_kicad_mod_shapes(UL_PACKAGE PAC)
     if (rect_conv)
         PAC.rectangles(R)
     {
-        layer =  layer_lookup(R.layer);
-
-		rotateRectangle(R);
+		// Eagle rectangles are filled. Convert to KiCAD polygons
+		printf("DP 0 0 0 0 %d %d %d\n", 5, 1, layer_lookup(R.layer));
 		
-        printf("DS %d %d %d %d %d %d\n",
-               egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[2]), egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[2]), RECT_WIDTH, layer);
-        printf("DS %d %d %d %d %d %d\n",
-               egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[2]), egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[3]), RECT_WIDTH, layer);
-        printf("DS %d %d %d %d %d %d\n",
-               egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[3]), egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[3]), RECT_WIDTH, layer);
-        printf("DS %d %d %d %d %d %d\n",
-               egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[2]), egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[3]), RECT_WIDTH, layer);
+		rotateRectangle(R);
+        printf("Dl %d %d\n", egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[2]));	// start at x1,y1
+        printf("Dl %d %d\n", egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[2]));	// go to x2, y1
+        printf("Dl %d %d\n", egl2ki(rotatedRect[1]), -egl2ki(rotatedRect[3]));	// go to x2, y2
+        printf("Dl %d %d\n", egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[3]));	// go to x1, y2
+        printf("Dl %d %d\n", egl2ki(rotatedRect[0]), -egl2ki(rotatedRect[2]));	// go back to x1, y1
     }
 
     // converting wires---------------------------------------------------------------------
